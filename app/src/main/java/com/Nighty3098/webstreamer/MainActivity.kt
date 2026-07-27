@@ -28,6 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.view.View
@@ -230,12 +231,20 @@ class MainActivity : ComponentActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
+                            Text(
+                                "WStream",
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(bottom = 48.dp)
+                            )
+
                             OutlinedTextField(
                                 value = port,
                                 onValueChange = { if (it.all { c -> c.isDigit() }) port = it },
-                                label = { Text("Port") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
+                                label = { Text("Port", modifier = Modifier.fillMaxWidth()) },
+                                modifier = Modifier.width(200.dp),
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center)
                             )
 
                             Spacer(modifier = Modifier.height(24.dp))
@@ -247,10 +256,19 @@ class MainActivity : ComponentActivity() {
                                     isStreaming = true
                                     checkPermissionsAndStart(p)
                                 },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.width(200.dp)
                             ) {
                                 Text("Start")
                             }
+
+                            Text(
+                                "By Nighty3098",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .padding(top = 80.dp)
+                            )
                         }
                     }
                 }
