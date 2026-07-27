@@ -28,8 +28,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.view.View
 import androidx.core.content.ContextCompat
@@ -224,50 +226,52 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     } else {
-                        Column(
+                        Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                                .padding(24.dp)
                         ) {
-                            Text(
-                                "WStream",
-                                style = MaterialTheme.typography.headlineLarge,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.padding(bottom = 48.dp)
-                            )
-
-                            OutlinedTextField(
-                                value = port,
-                                onValueChange = { if (it.all { c -> c.isDigit() }) port = it },
-                                label = { Text("Port", modifier = Modifier.fillMaxWidth()) },
-                                modifier = Modifier.width(200.dp),
-                                singleLine = true,
-                                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center)
-                            )
-
-                            Spacer(modifier = Modifier.height(24.dp))
-
-                            Button(
-                                onClick = {
-                                    val p = port.toIntOrNull() ?: 8080
-                                    lastPort = p
-                                    isStreaming = true
-                                    checkPermissionsAndStart(p)
-                                },
-                                modifier = Modifier.width(200.dp)
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
                             ) {
-                                Text("Start")
+                                Text(
+                                    "WStream",
+                                    fontSize = 36.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.padding(bottom = 48.dp)
+                                )
+
+                                OutlinedTextField(
+                                    value = port,
+                                    onValueChange = { if (it.all { c -> c.isDigit() }) port = it },
+                                    modifier = Modifier.width(200.dp),
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center)
+                                )
+
+                                Spacer(modifier = Modifier.height(24.dp))
+
+                                Button(
+                                    onClick = {
+                                        val p = port.toIntOrNull() ?: 8080
+                                        lastPort = p
+                                        isStreaming = true
+                                        checkPermissionsAndStart(p)
+                                    },
+                                    modifier = Modifier.width(200.dp)
+                                ) {
+                                    Text("Start")
+                                }
                             }
 
                             Text(
                                 "By Nighty3098",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .padding(top = 80.dp)
+                                modifier = Modifier.align(Alignment.BottomCenter)
                             )
                         }
                     }
