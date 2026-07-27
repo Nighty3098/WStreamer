@@ -3,8 +3,11 @@ package com.Nighty3098.webstreamer
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
@@ -33,7 +36,11 @@ class StreamService : LifecycleService() {
         when (intent?.action) {
             ACTION_START -> {
                 port = intent.getIntExtra(EXTRA_PORT, 8080)
-                startForeground(NOTIFICATION_ID, createNotification())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } else {
+                    startForeground(NOTIFICATION_ID, createNotification())
+                }
                 startServer()
             }
             ACTION_STOP -> {
