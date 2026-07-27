@@ -3,8 +3,6 @@ package com.Nighty3098.webstreamer
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -14,13 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -33,26 +24,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import android.view.View
 import androidx.core.content.ContextCompat
-import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
     private var previewView: PreviewView? = null
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var camera: Camera? = null
-    private val analysisExecutor = Executors.newSingleThreadExecutor()
     private var isStreamingActive = false
-    private var useFrontCamera = false
+    private var isFrontCamera = false
     private var scaleDetector: ScaleGestureDetector? = null
     private var currentZoomRatio = 1f
     private var currentResolution = Size(1280, 720)
-    private var availableResolutions = emptyList<Size>()
     private var onResolutionsChanged: ((List<Size>, Size) -> Unit)? = null
-    private var imageRotation = 0
-    private val reusableVBytes = ByteArray(1920 * 1080 / 4)
-    private val reusableUBytes = ByteArray(1920 * 1080 / 4)
 
     companion object {
         private const val TAG = "WebStreamer"
@@ -74,13 +56,9 @@ class MainActivity : ComponentActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             scaleDetector = ScaleGestureDetector(this@MainActivity, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
-                    val cam = camera ?: return false
-                    val zoomState = cam.cameraInfo.zoomState.value ?: return false
-                    val ratio = (zoomState.zoomRatio * detector.scaleFactor).coerceIn(
-                        zoomState.minZoomRatio, zoomState.maxZoomRatio
-                    )
-                    cam.cameraControl.setZoomRatio(ratio)
-                    currentZoomRatio = ratio
+                    val newZoom = (currentZoomRatio * detector.scaleFactor).coerceIn(1f, 10f)
+                    currentZoomRatio = newZoom
+                    StreamService.instance?.setZoom(newZoom)
                     return true
                 }
             })
@@ -92,7 +70,7 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = dynamicDarkColorScheme(this@MainActivity)) {
+            MaterialTheme(colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) dynamicDarkColorScheme(this@MainActivity) else darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     var isStreaming by remember { mutableStateOf(false) }
                     var port by remember { mutableStateOf("8080") }
@@ -102,16 +80,32 @@ class MainActivity : ComponentActivity() {
                     var selectedRes by remember { mutableStateOf<Size?>(null) }
                     var resMenuOpen by remember { mutableStateOf(false) }
                     var rotation by remember { mutableIntStateOf(0) }
+                    var zoomDisplay by remember { mutableFloatStateOf(1f) }
 
                     if (isStreaming) {
                         DisposableEffect(Unit) {
-                            onResolutionsChanged = { res, sel ->
-                                resolutions = res
+                            val res = this@MainActivity.queryAvailableResolutions()
+                            if (res.isNotEmpty()) {
+                                currentResolution = res.first()
+                            }
+                            onResolutionsChanged = { r, sel ->
+                                resolutions = r
                                 selectedRes = sel
                             }
-                            onDispose { onResolutionsChanged = null }
+                            onResolutionsChanged?.invoke(res, currentResolution)
+                            StreamService.instance?.onZoomChanged = { zoom ->
+                                currentZoomRatio = zoom
+                                zoomDisplay = zoom
+                            }
+                            StreamService.instance?.setResolution(currentResolution)
+                            onDispose {
+                                onResolutionsChanged = null
+                                StreamService.instance?.onZoomChanged = null
+                            }
                         }
+                    }
 
+                    if (isStreaming) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             AndroidView(
                                 factory = { previewView!! },
@@ -135,7 +129,7 @@ class MainActivity : ComponentActivity() {
                                 Spacer(modifier = Modifier.height(4.dp))
 
                                 Text(
-                                    "${currentResolution.width}x${currentResolution.height} | Zoom: ${"%.1f".format(currentZoomRatio)}x | ${rotation}°",
+                                    "${currentResolution.width}x${currentResolution.height} | Zoom: ${"%.1f".format(zoomDisplay)}x | ${rotation}°",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -164,12 +158,8 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onClick = {
                                                     currentResolution = size
-                                                    selectedRes = size
                                                     resMenuOpen = false
-                                                    if (isStreamingActive) {
-                                                        cameraProvider?.unbindAll()
-                                                        previewView?.post { initCamera() }
-                                                    }
+                                                    StreamService.instance?.setResolution(size)
                                                 }
                                             )
                                         }
@@ -191,9 +181,10 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             isStreaming = false
-                                            useFrontCamera = false
+                                            frontCamera = false
                                             rotation = 0
-                                            imageRotation = 0
+                                            currentZoomRatio = 1f
+                                            zoomDisplay = 1f
                                             stopStreaming()
                                         },
                                         modifier = Modifier.weight(1f),
@@ -205,7 +196,7 @@ class MainActivity : ComponentActivity() {
                                     FilledTonalButton(
                                         onClick = {
                                             rotation = (rotation + 90) % 360
-                                            imageRotation = rotation
+                                            StreamService.instance?.setRotation(rotation)
                                         },
                                         modifier = Modifier.weight(1f)
                                     ) {
@@ -215,8 +206,14 @@ class MainActivity : ComponentActivity() {
                                     FilledTonalButton(
                                         onClick = {
                                             frontCamera = !frontCamera
-                                            useFrontCamera = frontCamera
-                                            switchCamera()
+                                            isFrontCamera = frontCamera
+                                            StreamService.instance?.switchCamera()
+                                            val res = queryAvailableResolutions()
+                                            if (res.isNotEmpty()) {
+                                                onResolutionsChanged?.invoke(res, res.first())
+                                                currentResolution = res.first()
+                                                StreamService.instance?.setResolution(currentResolution)
+                                            }
                                         },
                                         modifier = Modifier.weight(1f)
                                     ) {
@@ -282,7 +279,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (isStreamingActive) initCamera()
+        if (isStreamingActive) {
+            StreamService.instance?.setPreviewSurface(previewView?.surfaceProvider)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        StreamService.instance?.setPreviewSurface(null)
     }
 
     private fun checkPermissionsAndStart(port: Int) {
@@ -296,45 +300,23 @@ class MainActivity : ComponentActivity() {
         if (needed.isEmpty()) startStreamingService(port) else requestPermissionLauncher.launch(needed)
     }
 
-    private fun startStreamingService(port: Int) {
-        isStreamingActive = true
-        Log.d(TAG, "Starting stream on ${NetworkUtils.getLocalIpAddress()}:$port")
-        val intent = Intent(this, StreamService::class.java).apply {
-            action = StreamService.ACTION_START
-            putExtra(StreamService.EXTRA_PORT, port)
-        }
-        ContextCompat.startForegroundService(this, intent)
-        initCamera()
-    }
-
-    private fun stopStreaming() {
-        isStreamingActive = false
-        stopCamera()
-        val intent = Intent(this, StreamService::class.java).apply {
-            action = StreamService.ACTION_STOP
-        }
-        startService(intent)
-    }
-
     private fun queryAvailableResolutions(): List<Size> {
         try {
-            val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
-            val cameraId = if (useFrontCamera) {
-                val ids = cameraManager.cameraIdList
-                ids.firstOrNull { id ->
+            val cameraManager = getSystemService(CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            val cameraId = if (isFrontCamera) {
+                cameraManager.cameraIdList.firstOrNull { id ->
                     val chars = cameraManager.getCameraCharacteristics(id)
-                    chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-                } ?: ids.firstOrNull()
+                    chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+                } ?: cameraManager.cameraIdList.firstOrNull()
             } else {
-                val ids = cameraManager.cameraIdList
-                ids.firstOrNull { id ->
+                cameraManager.cameraIdList.firstOrNull { id ->
                     val chars = cameraManager.getCameraCharacteristics(id)
-                    chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-                } ?: ids.firstOrNull()
+                    chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                } ?: cameraManager.cameraIdList.firstOrNull()
             } ?: return emptyList()
 
             val chars = cameraManager.getCameraCharacteristics(cameraId)
-            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return emptyList()
+            val map = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return emptyList()
             val sizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
                 ?: map.getOutputSizes(android.graphics.ImageFormat.JPEG)
                 ?: return emptyList()
@@ -345,228 +327,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun initCamera() {
-        val pv = previewView ?: return
-        val future = ProcessCameraProvider.getInstance(this)
-        future.addListener({
-            try {
-                cameraProvider = future.get()
-                availableResolutions = queryAvailableResolutions()
-                runOnUiThread {
-                    onResolutionsChanged?.invoke(availableResolutions, currentResolution)
-                }
-                bindCamera(pv)
-            } catch (e: Exception) {
-                Log.e(TAG, "CameraProvider failed", e)
-            }
-        }, ContextCompat.getMainExecutor(this))
+    private fun startStreamingService(port: Int) {
+        isStreamingActive = true
+        Log.d(TAG, "Starting stream on ${NetworkUtils.getLocalIpAddress()}:$port")
+        val intent = Intent(this, StreamService::class.java).apply {
+            action = StreamService.ACTION_START
+            putExtra(StreamService.EXTRA_PORT, port)
+        }
+        ContextCompat.startForegroundService(this, intent)
+        previewView?.postDelayed({
+            StreamService.instance?.setPreviewSurface(previewView?.surfaceProvider)
+        }, 200)
     }
 
-    private fun bindCamera(pv: PreviewView) {
-        val provider = cameraProvider ?: return
-
-        val preview = Preview.Builder().build().also {
-            it.surfaceProvider = pv.surfaceProvider
+    private fun stopStreaming() {
+        isStreamingActive = false
+        val intent = Intent(this, StreamService::class.java).apply {
+            action = StreamService.ACTION_STOP
         }
-
-        val resolutionSelector = ResolutionSelector.Builder()
-            .setResolutionStrategy(ResolutionStrategy(
-                currentResolution,
-                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-            ))
-            .build()
-
-        val analysis = ImageAnalysis.Builder()
-            .setResolutionSelector(resolutionSelector)
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-            .also {
-                it.setAnalyzer(analysisExecutor) { imageProxy ->
-                    processFrame(imageProxy)
-                }
-            }
-
-        val selector = if (useFrontCamera)
-            CameraSelector.DEFAULT_FRONT_CAMERA
-        else
-            CameraSelector.DEFAULT_BACK_CAMERA
-
-        try {
-            provider.unbindAll()
-            camera = provider.bindToLifecycle(this, selector, preview, analysis)
-            currentZoomRatio = 1f
-            Log.d(TAG, "Camera bound (${if (useFrontCamera) "front" else "back"})")
-        } catch (e: Exception) {
-            Log.e(TAG, "Bind failed", e)
-        }
-    }
-
-    private fun processFrame(imageProxy: androidx.camera.core.ImageProxy) {
-        if (!isStreamingActive) {
-            imageProxy.close()
-            return
-        }
-        try {
-            val w = imageProxy.width
-            val h = imageProxy.height
-            val nv21 = yuvToNv21(imageProxy)
-            imageProxy.close()
-            val rotated = if (imageRotation != 0) rotateNv21(nv21, w, h, imageRotation) else nv21
-            val outW = if (imageRotation == 90 || imageRotation == 270) h else w
-            val outH = if (imageRotation == 90 || imageRotation == 270) w else h
-            val jpeg = nv21ToJpeg(rotated, outW, outH, 70)
-            StreamState.pushFrame(jpeg)
-        } catch (e: Exception) {
-            Log.e(TAG, "Frame error", e)
-            try { imageProxy.close() } catch (_: Exception) {}
-        }
-    }
-
-    private fun rotateNv21(nv21: ByteArray, w: Int, h: Int, degrees: Int): ByteArray {
-        val size = w * h
-        val uvSize = size / 2
-        val outY = ByteArray(size)
-        val outUv = ByteArray(uvSize)
-        val uvW = w / 2
-        val uvH = h / 2
-
-        when (degrees) {
-            90 -> {
-                var pos = 0
-                for (j in 0 until w) {
-                    for (i in h - 1 downTo 0) {
-                        outY[pos++] = nv21[i * w + j]
-                    }
-                }
-                var uvPos = 0
-                for (outI in 0 until uvW) {
-                    for (outJ in 0 until uvH) {
-                        val srcI = uvH - 1 - outJ
-                        val srcJ = outI
-                        val srcIdx = (srcI * uvW + srcJ) * 2
-                        outUv[uvPos++] = nv21[size + srcIdx]
-                        outUv[uvPos++] = nv21[size + srcIdx + 1]
-                    }
-                }
-            }
-            180 -> {
-                var pos = 0
-                for (i in h - 1 downTo 0) {
-                    for (j in w - 1 downTo 0) {
-                        outY[pos++] = nv21[i * w + j]
-                    }
-                }
-                var uvPos = 0
-                for (outI in 0 until uvH) {
-                    for (outJ in 0 until uvW) {
-                        val srcI = uvH - 1 - outI
-                        val srcJ = uvW - 1 - outJ
-                        val srcIdx = (srcI * uvW + srcJ) * 2
-                        outUv[uvPos++] = nv21[size + srcIdx]
-                        outUv[uvPos++] = nv21[size + srcIdx + 1]
-                    }
-                }
-            }
-            270 -> {
-                var pos = 0
-                for (j in w - 1 downTo 0) {
-                    for (i in 0 until h) {
-                        outY[pos++] = nv21[i * w + j]
-                    }
-                }
-                var uvPos = 0
-                for (outI in 0 until uvW) {
-                    for (outJ in 0 until uvH) {
-                        val srcI = outJ
-                        val srcJ = uvW - 1 - outI
-                        val srcIdx = (srcI * uvW + srcJ) * 2
-                        outUv[uvPos++] = nv21[size + srcIdx]
-                        outUv[uvPos++] = nv21[size + srcIdx + 1]
-                    }
-                }
-            }
-            else -> return nv21
-        }
-
-        val result = ByteArray(size + uvSize)
-        System.arraycopy(outY, 0, result, 0, size)
-        System.arraycopy(outUv, 0, result, size, uvSize)
-        return result
-    }
-
-    private fun yuvToNv21(imageProxy: androidx.camera.core.ImageProxy): ByteArray {
-        val w = imageProxy.width
-        val h = imageProxy.height
-
-        val yPlane = imageProxy.planes[0]
-        val uPlane = imageProxy.planes[1]
-        val vPlane = imageProxy.planes[2]
-
-        val yRowStride = yPlane.rowStride
-        val uRowStride = uPlane.rowStride
-        val vRowStride = vPlane.rowStride
-        val uPixStride = uPlane.pixelStride
-        val vPixStride = vPlane.pixelStride
-
-        val nv21 = ByteArray(w * h * 3 / 2)
-
-        val yBuf = yPlane.buffer
-        var yPos = 0
-        for (row in 0 until h) {
-            yBuf.position(row * yRowStride)
-            yBuf.get(nv21, yPos, w)
-            yPos += w
-        }
-
-        val vBuf = vPlane.buffer
-        val uBuf = uPlane.buffer
-        vBuf.rewind()
-        uBuf.rewind()
-        val uvSize = vBuf.remaining()
-        val vBytes = if (uvSize <= reusableVBytes.size) reusableVBytes else ByteArray(uvSize)
-        val uBytes = if (uvSize <= reusableUBytes.size) reusableUBytes else ByteArray(uvSize)
-        vBuf.get(vBytes, 0, uvSize)
-        uBuf.get(uBytes, 0, uvSize)
-
-        val uvH = h / 2
-        val uvW = w / 2
-        var pos = w * h
-        for (row in 0 until uvH) {
-            for (col in 0 until uvW) {
-                val vi = (row * vRowStride + col * vPixStride).coerceIn(0, uvSize - 1)
-                val ui = (row * uRowStride + col * uPixStride).coerceIn(0, uvSize - 1)
-                nv21[pos++] = vBytes[vi]
-                nv21[pos++] = uBytes[ui]
-            }
-        }
-
-        return nv21
-    }
-
-    private fun nv21ToJpeg(nv21: ByteArray, w: Int, h: Int, quality: Int): ByteArray {
-        val yuvImage = android.graphics.YuvImage(
-            nv21, android.graphics.ImageFormat.NV21, w, h, null
-        )
-        val out = java.io.ByteArrayOutputStream(w * h / 4)
-        yuvImage.compressToJpeg(android.graphics.Rect(0, 0, w, h), quality, out)
-        return out.toByteArray()
-    }
-
-    private fun switchCamera() {
-        if (isStreamingActive) {
-            cameraProvider?.unbindAll()
-            previewView?.post { initCamera() }
-        }
-    }
-
-    private fun stopCamera() {
-        cameraProvider?.unbindAll()
-        cameraProvider = null
+        startService(intent)
     }
 
     override fun onDestroy() {
-        stopCamera()
-        analysisExecutor.shutdown()
+        previewView = null
         super.onDestroy()
     }
 }
