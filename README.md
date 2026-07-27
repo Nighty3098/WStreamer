@@ -4,7 +4,7 @@
 
 <br /><br />
 
-<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png" width="128px">
+<img src="img.jpg" width="35%">
 
 <br /><br />
 
